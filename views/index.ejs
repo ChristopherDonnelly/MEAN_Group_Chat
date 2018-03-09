@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Group Chat</title>
+    <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/smoothness/jquery-ui.css">
+    <link rel='stylesheet' href='/css/style.css' />
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+    <script type ="text/javascript" src="/socket.io/socket.io.js"></script>
+    <script type ="text/javascript">
+
+        // this triggers the connection event in our server!
+        var socket;
+
+        function makeDraggables(){
+            console.log('make draggable?')
+            $('.user_card').draggable({
+                stack: '.user_card',
+                opacity: 0.9,
+                containment: $('#drag_container'),
+                helper: "clone"
+            });
+        }
+
+         $(document).ready(function (){
+
+            $("#messages").droppable({
+                accept: ".user_card",
+                tolerance: "pointer",
+                drop: function( event, ui ) {
+                    console.log('Dropped!')
+                    var user = ui.helper;
+                    user.transfer( {
+                        to: $(this),
+                        duration: 500
+                    }, function(){
+                        // If in group chat then empty (this may just go into the private chat initialization)
+                        // $('#messages').empty();
+                        let id = user.context.id;
+                        console.log(id);
+                        socket.emit("init_private", { id: id });
+                    });
+                }
+            });
+
+            $("#submit_name").submit(function(e){
+                socket = io.connect();
+                
+                // socket = io.connect('http://localhost:8000', { 
+                //     rememberTransport: false, 
+                //     transports: ['WebSocket', 'Flash Socket', 'AJAX long-polling']
+                // });
+
+                let name = $(this).find('#name').val();
+
+                socket.emit("enter_chat", { name: name });
+
+                socket.on('successful_login', function(user){
+                    $('#nav p').text(user.name);
+                    $('#nav').removeClass('v-hidden');
+                });
+
+                socket.on('load_all_messages', function(data){
+                    let allMessages = data.messages;
+                    let $messagesLayer = $('#messages');
+
+                    console.log(allMessages)
+
+                    for(let i=0; i<allMessages.length; i++){
+                        console.log(allMessages[i])
+                        message = $(`<p>${allMessages[i]}</p>`).hide().fadeIn();
+                        
+                        $messagesLayer.append(message);
+                    }
+                    $messagesLayer.scrollTop($messagesLayer[0].scrollHeight);
+                });
+
+                socket.on('load_all_users', function(all_users){
+                    let userCard = '';
+                    let allUsers = all_users.users;
+                    let $usersLayer = $('#users');
+                    
+                    if(allUsers.length != 0){
+                        for(let i=0; i<allUsers.length; i++){
+                            userCard = $(`<div id="${allUsers[i].id}" class="user_card"><div class="card_title"><p>${allUsers[i].name}</p></div><div class="card_content"></div></div>`).hide().fadeIn(makeDraggables);
+                            
+                            $usersLayer.append(userCard);
+                        }
+                    }else{
+                        $('#users').append($('<p id="no_others">No other users logged in!</p>').hide().fadeIn());
+                    }
+                });
+
+                socket.on('user_joined', function(user){
+                    let $usersLayer = $('#users');
+                    let $noOthers = $usersLayer.find('#no_others');
+                    let userCard = `<div id="${user.id}" class="user_card"><div class="card_title"><p>${user.name}</p></div><div class="card_content"></div></div>`;
+                    if($noOthers.length != 0){
+                        $noOthers.fadeOut(function(){
+                            $(this).remove();
+
+                            $usersLayer.append($(userCard).hide().fadeIn(makeDraggables));
+                        });
+                    }else{
+                        $usersLayer.append($(userCard).hide().fadeIn(makeDraggables));
+                    }
+                });
+
+                socket.on('remove_user', function(user){
+                    $(`#${user.id}`).fadeOut('slow', function(){
+                        $(this).remove();
+                        
+                        if($('.user_card').length==0) $('#users').append($('<p id="no_others">No users currently logged in!</p>').hide().fadeIn());
+                    });
+
+                });
+
+                socket.on('global_message', function(result){
+                    $messagesLayer = $('#messages');
+                    $messagesLayer.append('<p>' + result.message + '</p>');
+                    $messagesLayer.scrollTop($messagesLayer[0].scrollHeight);
+                });
+
+                socket.on('request_private_join', function(data){
+                    console.log(data.join_id)
+                    console.log($(`#${data.join_id}`))
+                    $(`#${data.join_id}`).transfer( {
+                        to: $('#messages'),
+                        duration: 500
+                    }, function(){
+
+                        $("#dialog-confirm").dialog({
+                            appendTo: "#messages",
+                            position: { my: "center center", at: "center center", of: "#messages" },
+                            resizable: false,
+                            height: "auto",
+                            width: 400,
+                            modal: true,
+                            autoOpen: false,
+                            beforeClose: function () {
+                                $(this).dialog("widget").effect("transfer", {
+                                    to: $("#messages"),
+                                    className: "ui-effects-transfer"
+                                }, 500).dequeue().animate({ opacity: 0}, 500);
+                            },
+                            buttons: {
+                                "Join": function() {
+                                    $(this).dialog("close").dialog("widget");
+                                    alert('Joining Chat')
+                                },
+                                Cancel: function() {
+                                    $(this).dialog("close").dialog("widget");
+                                }
+                            }
+                        });
+
+                        $("#dialog-confirm").dialog("open").dialog("widget").css("visibility", "hidden");
+                    
+                        $('#messages').effect("transfer", {
+                            to: $("#dialog-confirm").dialog("widget"),
+                            className: "ui-effects-transfer"
+                        }, 500, function () {
+                            $("#dialog-confirm").dialog("widget").css("visibility", "visible").animate({ opacity: 100}, 500);
+                        });
+                    });
+
+                });
+
+                $(document).on('click', "#reset", function(){
+                    socket.emit("reset_users");
+                });
+
+                $(document).on('click', "#logout", function(){
+                   window.location = "/";
+                });
+                
+                $(this).hide();
+                $('#submit_message').show();
+                $('#messages').empty();
+
+                e.preventDefault();
+            });
+
+            $("#submit_message").submit(function(e){
+                let $messageLayer = $(this).find('#message');
+                let message = $messageLayer.val();
+
+                console.log(message)
+
+                socket.emit("submit_global_message", { message: message });
+
+                $messageLayer.val(' ').focus();
+
+                e.preventDefault();
+            });
+
+        });
+    </script>
+</head>
+<body>
+    <div id="nav" class="v-hidden">
+        <p></p>
+        <a href="#" id="logout">Log out</a>
+    </div>
+    <div id="wrapper">
+        <h1>Conversation Board</h1>
+        <div id="content_layer">
+            <h2>Global Chat</h2>
+
+            <div id="drag_container">
+                <div id="messages">
+                    <p>Enter your name below to join Group Chat</p>
+                </div>
+                <div id="users">
+                    
+                </div>
+            </div>
+
+            <form action="" id="submit_name" method="post">
+                <input type="text" name="name" id="name" placeholder="Enter Name">
+                <span>
+                    <input type="submit" value="Submit">
+                </span>
+            </form>
+            <form action="" id="submit_message" method="post" class="hidden">
+                <input type="text" name="message" id="message" placeholder="Enter Message">
+                <span>
+                    <input type="submit" value="Submit">
+                </span>
+            </form>
+            <!-- <button id="reset">Reset Users</button> -->
+
+            <div id="dialog-confirm" title="Join Private Chat?" class="hidden">
+                <p>User X is requesting that you join a private channel.</p>
+                <p>Do you wish to join?</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
